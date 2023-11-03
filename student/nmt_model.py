@@ -63,6 +63,7 @@ class NMT(nn.Module):
         # For sanity check only, not relevant to implementation
         self.gen_sanity_check = False
         self.counter = 0 
+        self.hidden_size = hidden_size # hidden size
 
         ### YOUR CODE HERE (~9 Lines)
         ### TODO - Initialize the following variables IN THIS ORDER:
@@ -135,7 +136,7 @@ class NMT(nn.Module):
         Hidden state: The hidden state is the output of the LSTM cell. It is the output of the LSTM cell at the current time step. It is also the input to the LSTM cell at the next time step. 
         Cell state: The cell state is the memory of the LSTM cell. It is the memory of the LSTM cell at the current time step. It is also the memory of the LSTM cell at the next time step.
         """
-        self.att_projection = nn.Linear(2 * hidden_size, hidden_size, bias=False)
+        self.att_projection = nn.Linear(2 * hidden_size, hidden_size, bias=False) # shape (h, h), hidden_size = h
         """
         What is the attention projection layer?
         Attention projection layer is used to project the hidden states of the encoder to the same dimension as the hidden states of the decoder.
@@ -290,7 +291,7 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/generated/torch.Tensor.reshape.html
 
         # Writing code here
-        X = self.model_embeddings.source(source_padded) # X: (src_len, b, e), source_padded: (src_len, b), e = embedding size
+        X = self.model_embeddings.source(source_padded) # source_padded: (src_len, b), X: (src_len, b, e), e = embedding size
         X = X.permute(1, 2, 0) # X: (b, e, src_len)
         """
         Why should we permute X?
@@ -309,10 +310,10 @@ class NMT(nn.Module):
         Answer:
         - Because the output of the CNN should be of shape (src_len, b, e).
         """
-        X = pack_padded_sequence(X, torch.LongTensor(source_lengths)) # X: (src_len, b, e)
+        X = pack_padded_sequence(X, source_lengths) # X: (src_len, b, e)
 
         enc_hiddens, (last_hidden, last_cell) = self.encoder(X) # enc_hiddens: (src_len, b, h*2), last_hidden: (2, b, h), last_cell: (2, b, h)
-        enc_hiddens, _ = pad_packed_sequence(enc_hiddens) # enc_hiddens: (src_len, b, h*2)
+        enc_hiddens, _ = pad_packed_sequence(enc_hiddens)# enc_hiddens: (src_len, b, h*2)
         enc_hiddens = enc_hiddens.permute(1, 0, 2) # enc_hiddens: (b, src_len, h*2)
 
         init_decoder_hidden = torch.cat((last_hidden[0], last_hidden[1]), dim=1) # init_decoder_hidden: (b, 2*h)
@@ -346,7 +347,16 @@ class NMT(nn.Module):
                                         tgt_len = maximum target sentence length, b = batch_size,  h = hidden size
         """
         # Chop off the <END> token for max length sentences.
-        target_padded = target_padded[:-1]
+        target_padded = target_padded[:-1] # the purpose of this line is to remove the <END> token for max length sentences.
+        """Why do we need to remove the <END> token for max length sentences?
+        Answer:
+        - Because we don't need the <END> token for max length sentences.
+        - The <END> token for max length sentences is just a padding token.
+        - We don't need the padding token because we have already padded the target sentences.
+        - We have already padded the target sentences because we need to make sure that each of the individual input examples has the same shape.
+        - We need to make sure that each of the individual input examples has the same shape because we want to use the pad_packed_sequence function.
+        - We want to use the pad_packed_sequence function because we want to apply the decoder to compute combined-output.
+        """
 
         # Initialize the decoder state (hidden and cell)
         dec_state = dec_init_state
@@ -354,6 +364,11 @@ class NMT(nn.Module):
         # Initialize previous combined output vector o_{t-1} as zero
         batch_size = enc_hiddens.size(0) # enc_hiddens.size(0) means the first dimension of enc_hiddens tensor. The first dimension of enc_hiddens tensor is the batch size.
         o_prev = torch.zeros(batch_size, self.hidden_size, device=self.device) # o_prev: (b, h)
+        """O_prev is the previous combined output vector o_{t-1}.
+        Why do we need to initialize o_prev as zero?
+        Answer:
+        - Because we need to initialize o_prev as zero in order to compute the combined output vectors for a batch.
+        """
 
         # Initialize a list we will use to collect the combined output o_t on each step
         combined_outputs = []
@@ -396,11 +411,25 @@ class NMT(nn.Module):
 
         # Writing code here
         enc_hiddens_proj = self.att_projection(enc_hiddens) # enc_hiddens_proj: (b, src_len, h)
+        """Why should we need to apply the attention projection layer to enc_hiddens?
+        Answer: 
+        - Because we need to apply the attention projection layer to enc_hiddens in order to compute the attention scores.
+        - We need to compute the attention scores in order to compute the attention output.
+
+        Why do we need to compute the attention output?
+        Answer:
+        - Because we need to compute the attention output in order to compute the combined output vectors for a batch.
+        """
         Y = self.model_embeddings.target(target_padded) # Y: (tgt_len, b, e), target_padded: (tgt_len, b), e = embedding size
         for Y_t in torch.split(Y, 1): # Y_t: (1, b, e)
-            Y_t = torch.squeeze(Y_t, dim=0)
-            Ybar_t = torch.cat((Y_t, o_prev), dim=1)
-            dec_state, o_t, e_t = self.step(Ybar_t, dec_state, enc_hiddens, enc_hiddens_proj, enc_masks)
+            Y_t = torch.squeeze(Y_t, dim=0) # Y_t: (b, e)
+            """Why should we need to squeeze Y_t?
+            Answer:
+            - Because we need to squeeze Y_t in order to concatenate Y_t with o_prev on their last dimension.
+            - We need to concatenate Y_t with o_prev on their last dimension in order to compute Ybar_t.
+            """
+            Ybar_t = torch.cat((Y_t, o_prev), dim=1) # Ybar_t: (b, e + h), dim=1 means that we want to concatenate Y_t with o_prev on their last dimension. The last dimension corresponds to the hidden size.
+            dec_state, o_t, e_t = self.step(Ybar_t, dec_state, enc_hiddens, enc_hiddens_proj, enc_masks) # dec_state: (h, c), o_t: (b, h), e_t: (b, src_len)
             combined_outputs.append(o_t)
             o_prev = o_t
         combined_outputs = torch.stack(combined_outputs) # combined_outputs: (tgt_len, b, h)
@@ -414,7 +443,7 @@ class NMT(nn.Module):
              enc_hiddens: torch.Tensor,
              enc_hiddens_proj: torch.Tensor,
              enc_masks: torch.Tensor) -> Tuple[Tuple, torch.Tensor, torch.Tensor]:
-        """ Compute one forward step of the LSTM decoder, including the attention computation.
+        """ Compute one forward step of the LSTM decoder, including the attention computation.  
 
         @param Ybar_t (Tensor): Concatenated Tensor of [Y_t o_prev], with shape (b, e + h). The input for the decoder,
                                 where b = batch size, e = embedding size, h = hidden size.
@@ -467,6 +496,7 @@ class NMT(nn.Module):
         # Set e_t to -inf where enc_masks has 1
         if enc_masks is not None:
             e_t.data.masked_fill_(enc_masks.bool(), -float('inf'))
+            # e_t is attention scores distribution
 
         ### YOUR CODE HERE (~6 Lines)
         ### TODO:
@@ -497,10 +527,19 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/torch.html#torch.tanh
 
         # Writing code here
-        dec_state, _ = self.decoder(Ybar_t, dec_state) # dec_state: (b, h), dec_hidden: (b, h), dec_cell: (b, h)
+        dec_state, _ = self.decoder(Ybar_t, dec_state) # dec_state: (b, h), dec_hidden: (b, h), dec_cell: (b, h), Y_t: (b, e), o_prev: (b, h), Y_bar_t: (b, e + h)
+        """
+        _ means that we don't need to use the dec_cell.
+        Why the defined decode has 4 parameters but now just has 2 parameters?
+        Answer:
+        - Because we don't need to use the enc_hiddens and enc_hiddens_proj.
+        - We don't need to use the enc_hiddens and enc_hiddens_proj because we have already computed the attention scores distribution.
+        - We have already computed the attention scores distribution because we have already computed the attention output.
+        """
         dec_hidden, dec_cell = dec_state # dec_hidden: (b, h), dec_cell: (b, h)
-        e_t = torch.bmm(enc_hiddens_proj, dec_hidden.unsqueeze(2)).squeeze(2) # e_t: (b, src_len)
-        alpha_t = F.softmax(e_t, dim=1) # alpha_t: (b, src_len)
+        e_t = torch.bmm(enc_hiddens_proj, dec_hidden.unsqueeze(2)).squeeze(2) # e_t: (b, src_len), enc_hiddens_proj: (b, src_len, h), dec_hidden.unsqueeze(2): (b, h, 1), squeeze(2): (b, src_len)  
+        """unsqueeze(2) means that we want to add a dimension at the third dimension of the tensor. Why do we want to add a dimension at the third dimension of the tensor? Because we want to use the batched matrix multiplication function. What is the third dimension? The third dimension is the dimension of the hidden size."""
+        alpha_t = F.softmax(e_t, dim=1) # alpha_t: (b, src_len), dim=1 means that we want to apply softmax along the second dimension. The second dimension is the dimension of the source length.
         a_t = torch.bmm(alpha_t.unsqueeze(1), enc_hiddens).squeeze(1)
         U_t = torch.cat((dec_hidden, a_t), dim=1) # U_t: (b, 2*h)
         V_t = self.combined_output_projection(U_t) # V_t: (b, h)
