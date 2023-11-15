@@ -560,10 +560,10 @@ class NMT(nn.Module):
         @returns enc_masks (Tensor): Tensor of sentence masks of shape (b, src_len),
                                     where src_len = max source length, h = hidden size.
         """
-        enc_masks = torch.zeros(enc_hiddens.size(0), enc_hiddens.size(1), dtype=torch.float)
+        enc_masks = torch.zeros(enc_hiddens.size(0), enc_hiddens.size(1), dtype=torch.float) # enc_masks: (b, src_len)
         for e_id, src_len in enumerate(source_lengths):
-            enc_masks[e_id, src_len:] = 1
-        return enc_masks.to(self.device)
+            enc_masks[e_id, src_len:] = 1 # enc_masks[e_id, src_len:] means that we want to set the value of enc_masks[e_id, src_len:] to 1.
+        return enc_masks.to(self.device) # why do we need to move enc_masks to the device? Because we need to make sure that enc_masks is on the same device as the model.
 
     def beam_search(self, src_sent: List[str], beam_size: int = 5, max_decoding_time_step: int = 70) -> List[
         Hypothesis]:
@@ -576,16 +576,22 @@ class NMT(nn.Module):
                 score: float: the log-likelihood of the target sentence
         """
         src_sents_var = self.vocab.src.to_input_tensor([src_sent], self.device)
+        """src_sents_var is a tensor of shape (src_len, b), where src_len is the maximum source sentence length, b is the batch size."""
 
         src_encodings, dec_init_vec = self.encode(src_sents_var, [len(src_sent)])
+        """src_encodings is a tensor of shape (b, src_len, h*2), where b is the batch size, src_len is the maximum source sentence length, h is the hidden size.
+        dec_init_vec is a tuple of tensors, each tensor is of shape (b, h), where b is the batch size, h is the hidden size.
+        """
         src_encodings_att_linear = self.att_projection(src_encodings)
+        """src_encodings_att_linear is a tensor of shape (b, src_len, h), where b is the batch size, src_len is the maximum source sentence length, h is the hidden size.
+        """
 
-        h_tm1 = dec_init_vec
-        att_tm1 = torch.zeros(1, self.hidden_size, device=self.device)
+        h_tm1 = dec_init_vec # h_tm1 means the previous hidden state, is abbreviation of h_{t-1}
+        att_tm1 = torch.zeros(1, self.hidden_size, device=self.device) # att_tm1 means the previous attention vector, is abbreviation of a_{t-1}
 
-        eos_id = self.vocab.tgt['</s>']
+        eos_id = self.vocab.tgt['</s>'] # eos_id means the id of the </s> token
 
-        hypotheses = [['<s>']]
+        hypotheses = [['<s>']] # hypotheses is a list of hypothesis, each hypothesis is a list of words
         hyp_scores = torch.zeros(len(hypotheses), dtype=torch.float, device=self.device)
         completed_hypotheses = []
 
@@ -597,27 +603,62 @@ class NMT(nn.Module):
             exp_src_encodings = src_encodings.expand(hyp_num,
                                                      src_encodings.size(1),
                                                      src_encodings.size(2))
+            """exp_src_encodings is a tensor of shape (hyp_num, src_len, h*2), where hyp_num is the number of hypotheses, src_len is the maximum source sentence length, h is the hidden size.
+            src_encodings.size(1) means the second dimension of src_encodings tensor. The second dimension of src_encodings tensor is the maximum source sentence length.
+            src_encodings.size(2) means the third dimension of src_encodings tensor. The third dimension of src_encodings tensor is the hidden size.
+            Is hidden_size now equal to 2 * hidden_size?
+            Answer: 
+            - No, hidden_size is still equal to hidden_size. why?
+            - Because the hidden_size is the dimension of the hidden state.
+            - The dimension of the hidden state is the dimension of the hidden state of the encoder."""
 
             exp_src_encodings_att_linear = src_encodings_att_linear.expand(hyp_num,
                                                                            src_encodings_att_linear.size(1),
                                                                            src_encodings_att_linear.size(2))
 
             y_tm1 = torch.tensor([self.vocab.tgt[hyp[-1]] for hyp in hypotheses], dtype=torch.long, device=self.device)
+            """y_tm1 is a tensor of shape (hyp_num, ), where hyp_num is the number of hypotheses.
+            self.vocab.tgt[hyp[-1]] means that we want to get the id of the last word of each hypothesis.]"""
             y_t_embed = self.model_embeddings.target(y_tm1)
 
-            x = torch.cat([y_t_embed, att_tm1], dim=-1)
-
+            x = torch.cat([y_t_embed, att_tm1], dim=-1) # dim=-1 means that we want to concatenate y_t_embed with att_tm1 on their last dimension. The last dimension corresponds to the hidden size.
+            """y_t_embed size is (hyp_num, e), where hyp_num is the number of hypotheses, e is the embedding size.
+            att_tm1 size is (hyp_num, h), where hyp_num is the number of hypotheses, h is the hidden size.
+            x size is (hyp_num, e + h), where hyp_num is the number of hypotheses, e is the embedding size, h is the hidden size."""
             (h_t, cell_t), att_t, _ = self.step(x, h_tm1,
                                                 exp_src_encodings, exp_src_encodings_att_linear, enc_masks=None)
+            """
+            h_t size is (hyp_num, h), where hyp_num is the number of hypotheses, h is the hidden size.
+            cell_t size is (hyp_num, h), where hyp_num is the number of hypotheses, h is the hidden size.
+            att_t size is (hyp_num, src_len), where hyp_num is the number of hypotheses, src_len is the maximum source sentence length.
+            att_t means the attention scores distribution."""
 
             # log probabilities over target words
-            log_p_t = F.log_softmax(self.target_vocab_projection(att_t), dim=-1)
+            log_p_t = F.log_softmax(self.target_vocab_projection(att_t), dim=-1) # dim = -1 means that we want to apply softmax along the last dimension. The last dimension corresponds to the target vocabulary size.
 
             live_hyp_num = beam_size - len(completed_hypotheses)
             contiuating_hyp_scores = (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t).view(-1)
+            """hyp_scores.unsqueeze(1) means that we want to add a dimension at the second dimension of the tensor. Why do we want to add a dimension at the second dimension of the tensor? Because we want to expand the tensor. What is the second dimension? The second dimension is the dimension of the target vocabulary size.
+            now hyp_scores size is (hyp_num, 1), where hyp_num is the number of hypotheses.
+            log_p_t size is (hyp_num, V), where hyp_num is the number of hypotheses, V is the target vocabulary size.
+            hyp_scores.unsqueeze(1).expand_as(log_p_t) means that we want to expand hyp_scores.unsqueeze(1) to the same size as log_p_t.
+            now hyp_scores.unsqueeze(1).expand_as(log_p_t) size is (hyp_num, V), where hyp_num is the number of hypotheses, V is the target vocabulary size.
+            (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t) means that we want to add hyp_scores.unsqueeze(1).expand_as(log_p_t) and log_p_t.
+            now (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t) size is (hyp_num, V), where hyp_num is the number of hypotheses, V is the target vocabulary size.
+            (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t).view(-1) means that we want to flatten (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t).
+            now (hyp_scores.unsqueeze(1).expand_as(log_p_t) + log_p_t).view(-1) size is (hyp_num * V), where hyp_num is the number of hypotheses, V is the target vocabulary size."""
             top_cand_hyp_scores, top_cand_hyp_pos = torch.topk(contiuating_hyp_scores, k=live_hyp_num)
+            """top_cand_hyp_pos means the position of the top k hypotheses."""
 
             prev_hyp_ids = torch.div(top_cand_hyp_pos, len(self.vocab.tgt), rounding_mode='floor')
+            """top_cand_hyp_pos means the position of the top k hypotheses.
+            len(self.vocab.tgt) means the target vocabulary size.
+            torch.div(top_cand_hyp_pos, len(self.vocab.tgt), rounding_mode='floor') means that we want to divide top_cand_hyp_pos by len(self.vocab.tgt) and round down.
+            why we want to divide top_cand_hyp_pos by len(self.vocab.tgt) and round down?
+            Answer:
+            - Because we want to get the id of the top k hypotheses.
+            - The id of the top k hypotheses is the id of the top k words in the target vocabulary.
+            - The id of the top k words in the target vocabulary is the position of the top k words in the target vocabulary."""
             hyp_word_ids = top_cand_hyp_pos % len(self.vocab.tgt)
 
             new_hypotheses = []
