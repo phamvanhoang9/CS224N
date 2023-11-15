@@ -4,8 +4,8 @@ import os
 import time
 
 import spacy # for tokenization
-spacy_de = spacy.load('de')
-spacy_en = spacy.load('en')
+spacy_de = spacy.load('de_core_news_sm')
+spacy_en = spacy.load('en_core_web_sm')
 import torch
 import torch.nn as nn
 import torch.optim as optim
