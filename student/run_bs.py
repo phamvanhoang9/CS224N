@@ -93,7 +93,7 @@ def evaluate(model, itr, criterion):
 
     return epoch_loss / len(itr)
 
-DEVICE = torch.device('cuda' if torch.cuda.is_availabel() else 'cpu')
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def main():
     parser = argparse.ArgumentParser()
@@ -131,7 +131,7 @@ def main():
     TRG = Field(tokenize=tokenize_en,
                 init_token=SOS_token,
                 eos_token=EOS_token,
-                lowe=True)
+                lower=True)
     
     train_data, valid_data, test_data = Multi30k.splits(exts=('.de', '.en'), fields=(SRC, TRG))
     print(f'Number of training examples: {len(train_data.examples)}')
